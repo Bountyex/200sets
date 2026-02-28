@@ -1,23 +1,13 @@
 import random
+import argparse
 import os
+import sys
+from datetime import datetime
 
-# ========== CONFIG ==========
-TOTAL_SETS = int(input("Total sets: "))
-GRID_SIZE = int(input("Grid size (5 for 5x5): "))
-
-SPECIAL_COUNT = int(input("How many special numbers to control? "))
-special_rules = []
-for _ in range(SPECIAL_COUNT):
-    num = int(input("Special number: "))
-    repeat_sets = int(input(f"In how many sets {num} should appear (max 3 times per set)? "))
-    special_rules.append({
-        "number": num,
-        "repeat_sets": repeat_sets
-    })
-
-OUTPUT_FILE = "streamed_multi_repeat_sets.txt"
-
-numbers_pool = [
+# ======================================
+# NUMBER POOL
+# ======================================
+NUMBERS_POOL = [
     5,10,15,20,25,
     30,50,75,100,150,
     200,250,300,500,750,
@@ -27,68 +17,164 @@ numbers_pool = [
     8500,9000,9500,10000
 ]
 
-SET_SIZE = GRID_SIZE * GRID_SIZE
 
-# ========== HELPER ==========
-def generate_set(set_index):
-    """Generate one 5x5 set respecting rules"""
+# ======================================
+# STREAM LOGGER
+# ======================================
+def stream(msg):
+    print(msg)
+    sys.stdout.flush()
+
+
+# ======================================
+# GRID PLACEMENT (NO ROW DUPLICATES)
+# ======================================
+def build_grid(numbers, grid_size):
+
+    numbers = numbers[:]
+    grid = []
+
+    for _ in range(grid_size):
+        row = []
+        used = set()
+
+        while len(row) < grid_size:
+            for i, n in enumerate(numbers):
+                if n not in used:
+                    row.append(n)
+                    used.add(n)
+                    numbers.pop(i)
+                    break
+
+        grid.append(row)
+
+    return grid
+
+
+# ======================================
+# GENERATE SINGLE SET
+# ======================================
+def generate_set(grid_size, special_rules):
+
+    set_size = grid_size * grid_size
     current_set = []
     used_counts = {}
 
-    # Apply special numbers
+    # ----- Special numbers (3 repeats)
     for rule in special_rules:
-        if set_index < rule["repeat_sets"]:
-            num = rule["number"]
-            current_set += [num]*3
-            used_counts[num] = 3
+        num = rule["number"]
+        current_set += [num] * 3
+        used_counts[num] = 3
 
-    # Random number repeat 2x
-    available_for_random_repeat = [n for n in numbers_pool if used_counts.get(n,0) <= 1]
-    if available_for_random_repeat:
-        r_num = random.choice(available_for_random_repeat)
-        times_to_add = min(2, 3 - used_counts.get(r_num,0))
-        current_set += [r_num]*times_to_add
-        used_counts[r_num] = used_counts.get(r_num,0)+times_to_add
+    # ----- Random 2x repeat
+    available = [
+        n for n in NUMBERS_POOL
+        if used_counts.get(n, 0) <= 1
+    ]
 
-    # Fill remaining
-    remaining_slots = SET_SIZE - len(current_set)
+    if available:
+        n = random.choice(available)
+        add = min(2, 3 - used_counts.get(n, 0))
+        current_set += [n] * add
+        used_counts[n] = used_counts.get(n, 0) + add
+
+    # ----- Fill remaining
+    remaining = set_size - len(current_set)
+
     fill_pool = []
-    for n in numbers_pool:
-        c = used_counts.get(n,0)
-        if c < 3:
-            fill_pool += [n]*(3-c)
+    for n in NUMBERS_POOL:
+        count = used_counts.get(n, 0)
+        if count < 3:
+            fill_pool += [n] * (3 - count)
 
-    if remaining_slots > len(fill_pool):
-        raise ValueError("Cannot fill set without exceeding max 3 per number. Reduce special repeats or increase grid size.")
+    if remaining > len(fill_pool):
+        raise ValueError("Cannot fill grid under constraints.")
 
-    current_set += random.sample(fill_pool, remaining_slots)
+    current_set += random.sample(fill_pool, remaining)
+
     random.shuffle(current_set)
 
-    # Place numbers row-aware
-    grid = []
-    idx = 0
-    for _ in range(GRID_SIZE):
-        row_set = set()
-        row = []
-        while len(row) < GRID_SIZE:
-            n = current_set[idx]
-            if n not in row_set:
-                row.append(n)
-                row_set.add(n)
-                idx += 1
-            else:
-                current_set.append(current_set.pop(idx))
-        grid.append(row)
-    return grid
+    return build_grid(current_set, grid_size)
 
-# ========== STREAM & SAVE ==========
-with open(OUTPUT_FILE, "w") as f:
-    for i in range(TOTAL_SETS):
-        grid = generate_set(i)
-        for row in grid:
-            f.write(",".join(map(str,row))+"\n")
-        f.write("\n")  # empty line between sets
-        # Streaming output to console
-        print(f"Set {i+1}/{TOTAL_SETS} generated...")
 
-print(f"\n✅ File saved as: {os.path.abspath(OUTPUT_FILE)}")
+# ======================================
+# MAIN GENERATOR
+# ======================================
+def run(total_sets, grid_size, special_rules, output, seed):
+
+    if seed:
+        random.seed(seed)
+
+    stream("🚀 Generation started")
+    stream(f"Sets: {total_sets}")
+    stream(f"Grid: {grid_size}x{grid_size}")
+    stream("----------------------------------")
+
+    all_sets = []
+
+    for i in range(total_sets):
+
+        grid = generate_set(grid_size, special_rules)
+
+        text_grid = "\n".join(
+            ",".join(map(str, row)) for row in grid
+        )
+
+        all_sets.append(text_grid)
+
+        # STREAM PROGRESS
+        if (i + 1) % 10 == 0 or i == total_sets - 1:
+            stream(f"✅ Generated {i+1}/{total_sets}")
+
+    with open(output, "w") as f:
+        f.write("\n\n".join(all_sets))
+
+    stream("----------------------------------")
+    stream(f"💾 Saved to: {os.path.abspath(output)}")
+    stream("🎉 Done!")
+
+
+# ======================================
+# CLI
+# ======================================
+def parse_special_rules(rule_strings):
+    """
+    Format:
+    --special 5000:100
+    meaning number 5000 appears in 100 sets
+    """
+    rules = []
+
+    for r in rule_strings:
+        number, repeat_sets = r.split(":")
+        rules.append({
+            "number": int(number),
+            "repeat_sets": int(repeat_sets)
+        })
+
+    return rules
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Multi Grid Generator (No Row Duplicate)"
+    )
+
+    parser.add_argument("--sets", type=int, required=True)
+    parser.add_argument("--grid", type=int, default=5)
+    parser.add_argument("--special", nargs="*", default=[])
+    parser.add_argument("--output", default="output.txt")
+    parser.add_argument("--seed", type=int, default=None)
+
+    args = parser.parse_args()
+
+    special_rules = parse_special_rules(args.special)
+
+    run(
+        total_sets=args.sets,
+        grid_size=args.grid,
+        special_rules=special_rules,
+        output=args.output,
+        seed=args.seed
+    )
